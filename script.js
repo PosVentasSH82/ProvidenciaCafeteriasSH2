@@ -33,6 +33,7 @@ const firebaseApp = initializeApp(firebaseConfig);
 const firebaseDb = getDatabase(firebaseApp);
 const firebaseStorage = getStorage(firebaseApp);
 const realtimeRootRef = ref(firebaseDb, FIREBASE_SHARED_NODE);
+const SESSION_STORAGE_KEY = 'cafeteria_current_session';
 
 const defaultUiSettings = { title1:'Mi Cafetería', title2:'Pantalla principal', posTitle:'POS Cafetería', posSubtitle:'Ventas, productos, deudas, cierres y resumen diario.', logoDataUrl:'', accentColor:'#1f7a5c', bgColor:'#f7f7fb', cardColor:'#ffffff', logoSize:120, title1Size:32, title2Size:16, title1Font:'Inter, system-ui, sans-serif', title2Font:'Inter, system-ui, sans-serif', title1Color:'#1d2530', title2Color:'#6f7a86', posLogoSize:56, ordersEnabled:true };
 const state = {
@@ -42,7 +43,7 @@ const state = {
   cashClosings: [],
   cashSession: null,
   users: [],
-  currentUser: null,
+  currentUser: (() => { try { return JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) || 'null'); } catch { return null; } })(),
   settings: { ...defaultUiSettings },
   categories: [],
   people: [],
@@ -787,6 +788,20 @@ function ensureUsers() {
     lastActivityAt: Number(u.lastActivityAt || 0),
     lastLogoutAt: Number(u.lastLogoutAt || 0)
   }));
+}
+
+function persistCurrentSession() {
+  try {
+    if (state.currentUser) sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state.currentUser));
+    else sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch (error) {
+    console.warn('[auth] no se pudo persistir la sesión en sessionStorage', error);
+  }
+}
+
+function availableUsersForLogin() {
+  ensureUsers();
+  return Array.isArray(state.users) ? state.users : [];
 }
 
 function currentUserRecord() {
@@ -3676,6 +3691,7 @@ function showLogin() {
   warehouseScreen?.classList.add('hidden');
   if (loginUserInput) loginUserInput.value = '';
   if (loginPassInput) loginPassInput.value = '';
+  if (!state.currentUser) persistCurrentSession();
   setMsg(loginMessage, '');
 }
 function showHome() {
@@ -3710,34 +3726,48 @@ function switchToPos(tabId = 'ventas') {
 async function handleLogin() {
   const username = loginUserInput?.value?.trim() || '';
   const password = loginPassInput?.value?.trim() || '';
+  console.info('[auth] intento de login', { username, firebaseReady, usersLoaded: Array.isArray(state.users) ? state.users.length : 0 });
   if (!username || !password) return setMsg(loginMessage, 'Ingresa usuario y contraseña para continuar.', false);
-  try { await pullFromCloudWithTimeout(1500); } catch {}
-  ensureUsers();
-  const user = state.users.find((u) => u.username === username && u.password === password);
-  if (!user) return setMsg(loginMessage, 'Usuario o contraseña incorrectos.', false);
-  if (user.enabled === false) return setMsg(loginMessage, 'Usuario inhabilitado por administrador.', false);
-  const now = Date.now();
-  user.lastActivityAt = now;
-  state.currentUser = { username: user.username, loginAt: now, lastActivityAt: now };
+  try {
+    setMsg(loginMessage, 'Validando acceso...');
+    await pullFromCloudWithTimeout(2500);
+    const users = availableUsersForLogin();
+    const user = users.find((u) => String(u.username || '').trim() === username && String(u.password || '') === password);
+    if (!user) {
+      console.warn('[auth] credenciales inválidas', { username, usersAvailable: users.map((u) => u.username) });
+      return setMsg(loginMessage, 'Usuario o contraseña incorrectos.', false);
+    }
+    if (user.enabled === false) return setMsg(loginMessage, 'Usuario inhabilitado por administrador.', false);
+    const now = Date.now();
+    user.lastActivityAt = now;
+    state.currentUser = { username: user.username, loginAt: now, lastActivityAt: now };
+    persistCurrentSession();
     beginSessionWatcher();
-  if (loginUserInput) loginUserInput.value = '';
-  if (loginPassInput) loginPassInput.value = '';
-  setMsg(loginMessage, '');
-  markUserActivity('login');
-  persist();
-  maybeForceLogoutFromClosure();
-  if (!state.currentUser) return;
-  renderOrdersVisibility();
-  renderHomeActions();
-  showHome();
-  renderSalesHistory();
-  if (!getActiveCashBox()) setMsg(homeMessage, 'La caja está cerrada. Espera a que un usuario autorizado la abra.', false);
+    if (loginUserInput) loginUserInput.value = '';
+    if (loginPassInput) loginPassInput.value = '';
+    setMsg(loginMessage, 'Ingreso exitoso.');
+    console.info('[auth] login exitoso', { username: user.username, currentUser: state.currentUser });
+    markUserActivity('login');
+    persist();
+    maybeForceLogoutFromClosure();
+    if (!state.currentUser) return;
+    renderOrdersVisibility();
+    renderHomeActions();
+    navigateTo('home', { replace: true });
+    showHome();
+    renderSalesHistory();
+    if (!getActiveCashBox()) setMsg(homeMessage, 'La caja está cerrada. Espera a que un usuario autorizado la abra.', false);
+  } catch (error) {
+    console.error('[auth] login error', error);
+    setMsg(loginMessage, `No se pudo iniciar sesión: ${error?.message || error}`, false);
+  }
 }
 
 function logout(message = '') {
   const u = currentUserRecord();
   if (u) u.lastLogoutAt = Date.now();
   state.currentUser = null;
+  persistCurrentSession();
   persist();
   showLogin();
   if (message) setMsg(loginMessage, message, false);
@@ -5305,6 +5335,7 @@ async function bootstrap() {
   applySettings();
   ensureSalesModeButton();
   wireEvents();
+  console.info('[auth] eventos de login conectados', { loginButtonBound: Boolean(loginBtn) });
   Promise.resolve().then(() => ensureJsPdfLibs()).catch(() => {});
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
   try {
