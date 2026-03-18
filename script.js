@@ -1,35 +1,73 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js';
+import {
+  getDatabase,
+  ref,
+  get,
+  set,
+  update,
+  push,
+  remove,
+  runTransaction,
+  onChildAdded,
+  onChildChanged,
+  onChildRemoved,
+  connectDatabaseEmulator,
+  goOffline,
+  goOnline
+} from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js';
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js';
+
+const firebaseConfig = {
+  apiKey: 'AIzaSyDj7CUA6ZojlG0lFRL3MpLt1YK3rHYIeLo',
+  authDomain: 'cafeteria-sh82-3dea3.firebaseapp.com',
+  databaseURL: 'https://cafeteria-sh82-3dea3-default-rtdb.firebaseio.com',
+  projectId: 'cafeteria-sh82-3dea3',
+  storageBucket: 'cafeteria-sh82-3dea3.firebasestorage.app',
+  messagingSenderId: '221296090484',
+  appId: '1:221296090484:web:4120beb522d3732cb5e021'
+};
+const FIREBASE_DB_URL = 'https://cafeteria-sh82-3dea3-default-rtdb.firebaseio.com';
+const FIREBASE_SHARED_NODE = 'cafeteria_shared';
+const FIREBASE_TOKEN = 'lnOKi5riEL7Rd6O6XQbqDFkiPzvmmaa7X7L08Zpc';
+const firebaseApp = initializeApp(firebaseConfig);
+const firebaseDb = getDatabase(firebaseApp);
+const firebaseStorage = getStorage(firebaseApp);
+const realtimeRootRef = ref(firebaseDb, FIREBASE_SHARED_NODE);
+
+const defaultUiSettings = { title1:'Mi Cafetería', title2:'Pantalla principal', posTitle:'POS Cafetería', posSubtitle:'Ventas, productos, deudas, cierres y resumen diario.', logoDataUrl:'', accentColor:'#1f7a5c', bgColor:'#f7f7fb', cardColor:'#ffffff', logoSize:120, title1Size:32, title2Size:16, title1Font:'Inter, system-ui, sans-serif', title2Font:'Inter, system-ui, sans-serif', title1Color:'#1d2530', title2Color:'#6f7a86', posLogoSize:56, ordersEnabled:true };
 const state = {
-  products: JSON.parse(localStorage.getItem('cafeteria_products') || '[]'),
-  sales: JSON.parse(localStorage.getItem('cafeteria_sales') || '[]'),
-  deletedSales: JSON.parse(localStorage.getItem('cafeteria_deleted_sales') || '[]'),
-  cashClosings: JSON.parse(localStorage.getItem('cafeteria_cash_closings') || '[]'),
-  cashSession: JSON.parse(localStorage.getItem('cafeteria_cash_session') || 'null'),
-  users: JSON.parse(localStorage.getItem('cafeteria_users') || '[]'),
-  currentUser: JSON.parse(localStorage.getItem('cafeteria_current_user') || 'null'),
-  settings: JSON.parse(localStorage.getItem('cafeteria_settings') || '{"title1":"Mi Cafetería","title2":"Pantalla principal","posTitle":"POS Cafetería","posSubtitle":"Ventas, productos, deudas, cierres y resumen diario.","logoDataUrl":"","accentColor":"#1f7a5c","bgColor":"#f7f7fb","cardColor":"#ffffff","logoSize":120,"title1Size":32,"title2Size":16,"title1Font":"Inter, system-ui, sans-serif","title2Font":"Inter, system-ui, sans-serif","title1Color":"#1d2530","title2Color":"#6f7a86","posLogoSize":56,"ordersEnabled":true}'),
-  categories: JSON.parse(localStorage.getItem('cafeteria_categories') || '[]'),
-  people: JSON.parse(localStorage.getItem('cafeteria_people') || '[]'),
-  stockConfig: JSON.parse(localStorage.getItem('cafeteria_stock_config') || '{"enabled":false,"min":0}'),
-  queuedOrders: JSON.parse(localStorage.getItem('cafeteria_queued_orders') || '[]'),
-  removedPeopleIds: JSON.parse(localStorage.getItem('cafeteria_removed_people_ids') || '[]'),
-  userSalesModes: JSON.parse(localStorage.getItem('cafeteria_user_sales_modes') || '{}'),
-  touchUiConfigByUser: JSON.parse(localStorage.getItem('cafeteria_touch_ui_config_by_user') || '{}'),
-  categoryImages: JSON.parse(localStorage.getItem('cafeteria_category_images') || '{}'),
-  orderCounters: JSON.parse(localStorage.getItem('cafeteria_order_counters') || '{}'),
-  deletedRecordIds: JSON.parse(localStorage.getItem('cafeteria_deleted_record_ids') || '{"cashClosings":[],"sales":[]}')
+  products: [],
+  sales: [],
+  deletedSales: [],
+  cashClosings: [],
+  cashSession: null,
+  users: [],
+  currentUser: null,
+  settings: { ...defaultUiSettings },
+  categories: [],
+  people: [],
+  stockConfig: { enabled:false, min:0 },
+  queuedOrders: [],
+  removedPeopleIds: [],
+  userSalesModes: {},
+  touchUiConfigByUser: {},
+  categoryImages: {},
+  orderCounters: {},
+  deletedRecordIds: { cashClosings: [], sales: [] }
 };
 
 let sessionWatchInterval = null;
 const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
 const MAX_IMAGE_UPLOAD_BYTES = Number.POSITIVE_INFINITY;
 const imageUploadStatus = { product: {}, category: {} };
-const IMAGE_DB_NAME = 'cafeteria_images_db';
-const IMAGE_DB_STORE = 'images';
 const imagePreviewCache = {};
 const imageLoadInFlight = {};
 const imageMissingRefs = {};
-let imageDbPromise = null;
 let scheduledImageUiRefresh = 0;
+let firebaseReady = false;
+let realtimeBindingStarted = false;
+const collectionBindings = new Map();
+let lastPersistedState = null;
 
 const $ = (id) => document.getElementById(id);
 const loginScreen = $('loginScreen');
@@ -336,19 +374,19 @@ let activeOrderId = '';
 let isSubmittingSale = false;
 let saleProceedReady = false;
 state.currentCart = [];
-state.outflows = JSON.parse(localStorage.getItem('cafeteria_outflows') || '[]');
+state.outflows = [];
 state.comboDraft = [];
 state.activeDebtorId = '';
-state.debtPayments = JSON.parse(localStorage.getItem('cafeteria_debt_payments') || '[]');
+state.debtPayments = [];
 state.comboBuilderItems = [];
-state.lastSyncAt = Number(localStorage.getItem('cafeteria_last_sync_at') || '0');
-state.forceLogoutAt = Number(localStorage.getItem('cafeteria_force_logout_at') || '0');
-state.cashBoxes = JSON.parse(localStorage.getItem('cafeteria_cash_boxes') || '[]');
+state.lastSyncAt = 0;
+state.forceLogoutAt = 0;
+state.cashBoxes = [];
 state.selectedClosingIds = [];
 state.generatedClosingsStats = null;
-state.components = JSON.parse(localStorage.getItem('cafeteria_components') || '[]');
-state.componentLinks = JSON.parse(localStorage.getItem('cafeteria_component_links') || '{}');
-state.componentMoves = JSON.parse(localStorage.getItem('cafeteria_component_moves') || '[]');
+state.components = [];
+state.componentLinks = {};
+state.componentMoves = [];
 
 let appConfig = {
   stockActivo: Boolean(state.stockConfig?.enabled),
@@ -356,12 +394,7 @@ let appConfig = {
   stockMinimo: Number(state.stockConfig?.min || 0)
 };
 
-let cloudPullInFlight = null;
 let cloudSyncTimer = null;
-let lastCloudPullAt = 0;
-let cloudHydrated = false;
-const CLOUD_PULL_MIN_INTERVAL_MS = 500;
-const CLOUD_POLL_INTERVAL_MS = 700;
 
 function syncAppConfig() {
   appConfig = {
@@ -376,17 +409,12 @@ let tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig
 function syncTempConfigFromApp() {
   tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig.activarPedidos };
 }
-state.activeCashBoxId = localStorage.getItem('cafeteria_active_cash_box_id') || '';
-state.systemStatus = localStorage.getItem('cafeteria_system_status') || 'CAJA_CERRADA';
+state.activeCashBoxId = '';
+state.systemStatus = 'CAJA_CERRADA';
 state.salesHistoryMode = 'all';
 
-const SHARED_DB_PATH = 'cafeteria_shared';
-const LEGACY_DB_PATH = 'cafeteria_BaseDatos2';
-const defaultCloudConfig = {
-  firebaseDbUrl: 'https://sh82-d2bf1-default-rtdb.firebaseio.com',
-  firebaseDbToken: 'LTQRqLhvxLxBkGi3a9ia2tlTSvDRu0lrxxczVB4e',
-  firebaseDbPath: SHARED_DB_PATH
-};
+const SHARED_DB_PATH = FIREBASE_SHARED_NODE;
+const defaultCloudConfig = { firebaseDbUrl: FIREBASE_DB_URL, firebaseDbToken: FIREBASE_TOKEN, firebaseDbPath: FIREBASE_SHARED_NODE };
 
 const defaultBillingConfig = {
   enabled: false,
@@ -446,7 +474,7 @@ function normalizeCloudSettings() {
   if (!String(state.settings.firebaseDbUrl || '').trim()) state.settings.firebaseDbUrl = defaultCloudConfig.firebaseDbUrl;
   if (!String(state.settings.firebaseDbToken || '').trim()) state.settings.firebaseDbToken = defaultCloudConfig.firebaseDbToken;
   const currentPath = String(state.settings.firebaseDbPath || '').trim();
-  if (!currentPath || currentPath === LEGACY_DB_PATH) state.settings.firebaseDbPath = SHARED_DB_PATH;
+  if (!currentPath) state.settings.firebaseDbPath = SHARED_DB_PATH;
   normalizeBillingSettings();
 }
 
@@ -483,16 +511,6 @@ function formatProductWithComboDetails(item) {
 function uid() { return `${Date.now()}_${Math.floor(Math.random() * 9999)}`; }
 function setMsg(el, txt, ok = true) { if (!el) return; el.textContent = txt; el.className = ok ? 'ok' : 'error'; }
 
-function safeLocalSet(key, value) {
-  try {
-    localStorage.setItem(key, value);
-    return true;
-  } catch (err) {
-    console.warn('[localStorage] setItem failed', key, err?.message || err);
-    return false;
-  }
-}
-
 function refreshFinancialViews() {
   renderSalesHistory();
   renderDeletedSales();
@@ -505,145 +523,79 @@ function refreshFinancialViews() {
   renderOutflows();
 }
 
-function productsForLocalPersistence() {
-  return (state.products || []).map((p) => ({ ...p }));
+function cloneData(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
-function categoryImagesForLocalPersistence() {
-  return { ...(state.categoryImages || {}) };
+function mapFromArray(list = []) {
+  return (list || []).reduce((acc, item) => {
+    if (item?.id) acc[String(item.id)] = cloneData(item);
+    return acc;
+  }, {});
 }
 
-function saveLocalState() {
-  safeLocalSet('cafeteria_last_sync_at', String(state.lastSyncAt || 0));
-  safeLocalSet('cafeteria_force_logout_at', String(state.forceLogoutAt || 0));
-  safeLocalSet('cafeteria_cash_boxes', JSON.stringify(state.cashBoxes || []));
-  safeLocalSet('cafeteria_active_cash_box_id', state.activeCashBoxId || '');
-  safeLocalSet('cafeteria_system_status', state.systemStatus || 'CAJA_CERRADA');
-  safeLocalSet('cafeteria_products', JSON.stringify(productsForLocalPersistence()));
-  safeLocalSet('cafeteria_sales', JSON.stringify(state.sales));
-  safeLocalSet('cafeteria_deleted_sales', JSON.stringify(state.deletedSales));
-  safeLocalSet('cafeteria_cash_closings', JSON.stringify(state.cashClosings));
-  safeLocalSet('cafeteria_cash_session', JSON.stringify(state.cashSession));
-  safeLocalSet('cafeteria_users', JSON.stringify(state.users));
-  safeLocalSet('cafeteria_current_user', JSON.stringify(state.currentUser));
-  safeLocalSet('cafeteria_settings', JSON.stringify(state.settings));
-  safeLocalSet('cafeteria_categories', JSON.stringify(state.categories));
-  safeLocalSet('cafeteria_people', JSON.stringify(state.people));
-  safeLocalSet('cafeteria_stock_config', JSON.stringify(state.stockConfig));
-  safeLocalSet('cafeteria_outflows', JSON.stringify(state.outflows));
-  safeLocalSet('cafeteria_debt_payments', JSON.stringify(state.debtPayments));
-  safeLocalSet('cafeteria_components', JSON.stringify(state.components || []));
-  safeLocalSet('cafeteria_component_links', JSON.stringify(state.componentLinks || {}));
-  safeLocalSet('cafeteria_component_moves', JSON.stringify(state.componentMoves || []));
-  safeLocalSet('cafeteria_queued_orders', JSON.stringify(state.queuedOrders || []));
-  safeLocalSet('cafeteria_removed_people_ids', JSON.stringify(state.removedPeopleIds || []));
-  safeLocalSet('cafeteria_user_sales_modes', JSON.stringify(state.userSalesModes || {}));
-  safeLocalSet('cafeteria_touch_ui_config_by_user', JSON.stringify(state.touchUiConfigByUser || {}));
-  safeLocalSet('cafeteria_category_images', JSON.stringify(categoryImagesForLocalPersistence()));
-  safeLocalSet('cafeteria_order_counters', JSON.stringify(state.orderCounters || {}));
-  safeLocalSet('cafeteria_deleted_record_ids', JSON.stringify(state.deletedRecordIds || { cashClosings: [], sales: [] }));
+function sortedArrayFromMap(mapValue = {}, sortKey = 'createdAt') {
+  return Object.values(mapValue || {}).sort((a, b) => {
+    const av = Date.parse(a?.[sortKey] || '') || 0;
+    const bv = Date.parse(b?.[sortKey] || '') || 0;
+    return bv - av;
+  });
 }
 
-function scheduleCloudSync(delayMs = 1200) {
+function snapshotPayload() {
+  return {
+    products: mapFromArray(state.products),
+    sales: mapFromArray(state.sales),
+    deletedSales: mapFromArray(state.deletedSales),
+    cashClosings: mapFromArray(state.cashClosings),
+    cashSession: cloneData(state.cashSession),
+    users: mapFromArray((state.users || []).map((u) => ({ ...u, id: u.username }))),
+    settings: cloneData(state.settings),
+    categories: cloneData(state.categories || []),
+    people: mapFromArray(state.people),
+    stockConfig: cloneData(state.stockConfig),
+    outflows: mapFromArray(state.outflows),
+    debtPayments: mapFromArray(state.debtPayments),
+    components: mapFromArray(state.components),
+    componentLinks: cloneData(state.componentLinks || {}),
+    componentMoves: mapFromArray(state.componentMoves),
+    cashBoxes: mapFromArray(state.cashBoxes),
+    activeCashBoxId: state.activeCashBoxId || '',
+    systemStatus: state.systemStatus || 'CAJA_CERRADA',
+    forceLogoutAt: Number(state.forceLogoutAt || 0),
+    userSalesModes: cloneData(state.userSalesModes || {}),
+    touchUiConfigByUser: cloneData(state.touchUiConfigByUser || {}),
+    categoryImages: cloneData(state.categoryImages || {}),
+    orderCounters: cloneData(state.orderCounters || {}),
+    deletedRecordIds: cloneData(state.deletedRecordIds || { cashClosings: [], sales: [] }),
+    queuedOrders: mapFromArray(state.queuedOrders || []),
+    removedPeopleIds: cloneData(state.removedPeopleIds || []),
+    updatedAt: Date.now()
+  };
+}
+
+async function syncToCloud() {
+  if (!firebaseReady) throw new Error('Firebase no inicializado.');
+  const payload = snapshotPayload();
+  const previous = lastPersistedState || {};
+  const patch = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (JSON.stringify(previous[key]) !== JSON.stringify(value)) patch[key] = value;
+  }
+  if (!Object.keys(patch).length) return payload;
+  await update(realtimeRootRef, patch);
+  lastPersistedState = payload;
+  state.lastSyncAt = Number(payload.updatedAt || Date.now());
+  return payload;
+}
+
+function scheduleCloudSync(delayMs = 250) {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
     cloudSyncTimer = null;
-    syncToCloud().catch((err) => console.error('[sync] scheduled sync failed', err));
-  }, Math.max(200, Number(delayMs || 1200)));
+    syncToCloud().catch((err) => console.error('[firebase] persist failed', err));
+  }, Math.max(50, Number(delayMs || 250)));
 }
-
-
-function cloudRootUrl() {
-  const base = String(state.settings?.firebaseDbUrl || '').replace(/\/$/, '');
-  if (!base) return '';
-  const token = state.settings?.firebaseDbToken ? `?auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
-  return `${base}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json${token}`;
-}
-
-function cloudChildUrl(childPath = '') {
-  const root = cloudRootUrl();
-  if (!root) return '';
-  const safeChild = String(childPath || '').replace(/^\/+/, '');
-  return safeChild ? root.replace(/\.json(\?.*)?$/, `/${safeChild}.json$1`) : root;
-}
-
-
-function inferStorageProjectId() {
-  const dbUrl = String(state.settings?.firebaseDbUrl || defaultCloudConfig.firebaseDbUrl || '');
-  const m = dbUrl.match(/^https:\/\/([^.]+)\./i);
-  const hostId = m ? String(m[1] || '').trim() : '';
-  if (!hostId) return '';
-  return hostId.replace(/-default-rtdb$/i, '');
-}
-
-function inferStorageBucketCandidates() {
-  const configured = String(state.settings?.firebaseStorageBucket || '').trim();
-  if (configured) return [configured];
-  const projectId = inferStorageProjectId();
-  if (!projectId) return [];
-  return [`${projectId}.firebasestorage.app`, `${projectId}.appspot.com`];
-}
-
-function inferStorageBucket() {
-  return inferStorageBucketCandidates()[0] || '';
-}
-
-let resolvedStorageBucket = '';
-async function resolveStorageBucket() {
-  if (resolvedStorageBucket) return resolvedStorageBucket;
-  const candidates = inferStorageBucketCandidates();
-  if (!candidates.length) return '';
-  for (const bucket of candidates) {
-    try {
-      const res = await fetch(`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o?maxResults=1`, { method: 'GET' });
-      if (res.status !== 404) {
-        resolvedStorageBucket = bucket;
-        return bucket;
-      }
-    } catch {}
-  }
-  return candidates[0] || '';
-}
-
-let firebaseStorageReadyPromise = null;
-let firebaseStorageBucketBound = '';
-async function ensureFirebaseStorageSdk(bucketOverride = '') {
-  if (window.firebase?.storage) return window.firebase;
-  if (firebaseStorageReadyPromise && (!bucketOverride || bucketOverride === firebaseStorageBucketBound)) return firebaseStorageReadyPromise;
-  const loadScript = (src) => new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      if (window.firebase?.storage) return resolve();
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
-    document.head.appendChild(script);
-  });
-  firebaseStorageReadyPromise = (async () => {
-    await withTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js'), 7000, 'No se pudo cargar Firebase App SDK.');
-    await withTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js'), 7000, 'No se pudo cargar Firebase Storage SDK.');
-    if (!window.firebase) throw new Error('Firebase SDK no disponible.');
-    const bucket = bucketOverride || inferStorageBucket();
-    if (!bucket) throw new Error('No se pudo inferir firebaseStorageBucket.');
-    firebaseStorageBucketBound = bucket;
-    const appName = 'cafeteria-storage';
-    const existing = window.firebase.apps.find((a) => a.name === appName);
-    const app = existing || window.firebase.initializeApp({ storageBucket: bucket }, appName);
-    return { app, storage: window.firebase.storage(app) };
-  })();
-  return firebaseStorageReadyPromise;
-}
-
-function normalizeImagePathSegment(value) {
-  return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item';
-}
-
 
 function withTimeout(promise, timeoutMs, message = 'Tiempo de espera agotado.') {
   let timer = 0;
@@ -651,6 +603,10 @@ function withTimeout(promise, timeoutMs, message = 'Tiempo de espera agotado.') 
     timer = window.setTimeout(() => reject(new Error(message)), Math.max(1000, Number(timeoutMs || 25000)));
   });
   return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+function normalizeImagePathSegment(value) {
+  return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item';
 }
 
 async function optimizeImageForUpload(file, { maxSize = 300 } = {}) {
@@ -672,108 +628,145 @@ async function optimizeImageForUpload(file, { maxSize = 300 } = {}) {
 }
 
 async function uploadImageToFirebaseStorage({ kind, key, file, previousUrl = '', onProgress = null }) {
-  const bucket = await resolveStorageBucket();
-  if (!bucket) throw new Error('No se pudo determinar el bucket de Firebase Storage.');
   const safeKey = normalizeImagePathSegment(key);
   const ext = file.type.includes('png') ? 'webp' : (file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : 'webp');
   const folder = kind === 'category' ? 'categorias' : 'productos';
   const path = `${folder}/${safeKey}-${Date.now()}.${ext}`;
   const optimized = await optimizeImageForUpload(file, { maxSize: kind === 'category' ? 400 : 300 });
-  const { storage } = await ensureFirebaseStorageSdk(bucket);
-  const ref = storage.ref(path);
-  const task = ref.put(optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
+  const uploadTask = uploadBytesResumable(storageRef(firebaseStorage, path), optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
   await withTimeout(new Promise((resolve, reject) => {
-    task.on('state_changed', (snap) => {
+    uploadTask.on('state_changed', (snap) => {
       if (!onProgress) return;
       const total = Number(snap.totalBytes || 0);
       const loaded = Number(snap.bytesTransferred || 0);
       onProgress(total > 0 ? Math.round((loaded / total) * 100) : 0);
-    }, (err) => reject(err), () => resolve());
+    }, reject, resolve);
   }), 20000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.');
-  const downloadUrl = await withTimeout(ref.getDownloadURL(), 8000, 'No se pudo obtener URL pública de la imagen.');
+  const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
   try {
     if (previousUrl && previousUrl.includes('/o/')) {
       const oldPath = decodeURIComponent(previousUrl.split('/o/')[1]?.split('?')[0] || '');
-      if (oldPath) {
-        await storage.ref(oldPath).delete();
-      }
+      if (oldPath) await deleteObject(storageRef(firebaseStorage, oldPath));
     }
   } catch {}
   return downloadUrl;
 }
 
 async function pullFromCloudWithTimeout(timeoutMs = 1800) {
-  const pullPromise = pullFromCloud({ force: true });
-  const timeoutPromise = new Promise((resolve) => setTimeout(resolve, Math.max(300, Number(timeoutMs || 1800))));
-  await Promise.race([pullPromise, timeoutPromise]);
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('No se pudo convertir imagen.'));
-    reader.readAsDataURL(blob);
-  });
+  await withTimeout(initializeRealtimeState(), timeoutMs, 'No se pudo hidratar estado desde Firebase.');
 }
 
 async function migrateCategoryImageRefsToDataUrls() {
-  const entries = Object.entries(state.categoryImages || {}).filter(([, value]) => String(value || '').startsWith('idb:'));
-  if (!entries.length) return false;
-  let changed = false;
-  for (const [category, ref] of entries) {
-    try {
-      const blob = await imageDbGet(String(ref).slice(4));
-      if (!blob) continue;
-      state.categoryImages[category] = await blobToDataUrl(blob);
-      changed = true;
-    } catch {}
-  }
-  if (changed) persist();
-  return changed;
+  return false;
 }
 
 async function reserveNextOrderNumber(cashBoxId) {
-  const fallback = () => {
-    const lastIssued = Number(state.orderCounters?.[cashBoxId] || 0);
-    const sessionCandidate = Number(state.cashSession?.orderCounter || 1);
-    const next = lastIssued > 0 ? (lastIssued + 1) : (sessionCandidate > 0 ? sessionCandidate : 1);
-    state.orderCounters = state.orderCounters || {};
-    state.orderCounters[cashBoxId] = next;
-    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
-    return next;
-  };
-  const root = cloudRootUrl();
-  if (!root || !cashBoxId) return fallback();
-  const counterPath = encodeURIComponent(cashBoxId);
-  const counterUrl = root.replace(/\.json(\?.*)?$/, `/orderCounters/${counterPath}.json$1`);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const getResp = await fetch(counterUrl, { headers: { 'X-Firebase-ETag': 'true' } });
-    if (!getResp.ok) break;
-    const etag = getResp.headers.get('ETag') || '*';
-    const current = Number(await getResp.json()) || 0;
-    const next = current + 1;
-    const putResp = await fetch(counterUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'if-match': etag },
-      body: JSON.stringify(next)
-    });
-    if (putResp.status === 412) continue;
-    if (!putResp.ok) break;
-    state.orderCounters = state.orderCounters || {};
-    state.orderCounters[cashBoxId] = next;
-    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
-    return next;
-  }
-  return fallback();
+  if (!cashBoxId) throw new Error('Caja activa no definida para correlativo.');
+  const counterRef = ref(firebaseDb, `${FIREBASE_SHARED_NODE}/orderCounters/${cashBoxId}`);
+  const result = await runTransaction(counterRef, (current) => (Number(current || 0) + 1), { applyLocally: false });
+  if (!result.committed) throw new Error('No se pudo reservar correlativo.');
+  const next = Number(result.snapshot.val() || 0);
+  state.orderCounters = state.orderCounters || {};
+  state.orderCounters[cashBoxId] = next;
+  if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
+  return next;
 }
 
 function persist(options = {}) {
   if (state.currentUser && !validateSessionPolicy({ silent: false })) return;
-  saveLocalState();
   if (options.sync === false) return;
-  if (!cloudHydrated) return;
-  scheduleCloudSync(document.hidden ? 1200 : 600);
+  if (!firebaseReady) return;
+  scheduleCloudSync(document.hidden ? 450 : 120);
+}
+
+async function initializeRealtimeState() {
+  if (realtimeBindingStarted) return;
+  realtimeBindingStarted = true;
+  const rootSnap = await get(realtimeRootRef);
+  if (!rootSnap.exists()) {
+    ensureUsers();
+    ensureSeedData();
+    normalizeCloudSettings();
+    await set(realtimeRootRef, snapshotPayload());
+  }
+  const registerCollection = (key, target, { transformIn = (v) => v, sortKey = 'createdAt' } = {}) => {
+    const collectionRef = ref(firebaseDb, `${FIREBASE_SHARED_NODE}/${key}`);
+    const syncTarget = async () => {
+      const snap = await get(collectionRef);
+      state[target] = sortedArrayFromMap(snap.val() || {}, sortKey).map(transformIn);
+      if (key === 'users') state[target] = state[target].map((u) => ({ ...u, username: u.username || u.id })).sort((a,b)=> String(a.username||'').localeCompare(String(b.username||'')));
+    };
+    collectionBindings.set(key, syncTarget);
+    onChildAdded(collectionRef, () => syncTarget().then(handleRemoteMutation));
+    onChildChanged(collectionRef, () => syncTarget().then(handleRemoteMutation));
+    onChildRemoved(collectionRef, () => syncTarget().then(handleRemoteMutation));
+    return syncTarget();
+  };
+  await Promise.all([
+    registerCollection('products', 'products'),
+    registerCollection('sales', 'sales'),
+    registerCollection('deletedSales', 'deletedSales'),
+    registerCollection('cashClosings', 'cashClosings'),
+    registerCollection('users', 'users'),
+    registerCollection('people', 'people'),
+    registerCollection('outflows', 'outflows'),
+    registerCollection('debtPayments', 'debtPayments'),
+    registerCollection('components', 'components'),
+    registerCollection('componentMoves', 'componentMoves'),
+    registerCollection('cashBoxes', 'cashBoxes'),
+    registerCollection('queuedOrders', 'queuedOrders')
+  ]);
+  const objectKeys = ['settings','categories','stockConfig','componentLinks','cashSession','activeCashBoxId','systemStatus','forceLogoutAt','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds','removedPeopleIds','updatedAt'];
+  await Promise.all(objectKeys.map(async (key) => {
+    const snap = await get(ref(firebaseDb, `${FIREBASE_SHARED_NODE}/${key}`));
+    if (snap.exists()) state[key] = snap.val();
+  }));
+  objectKeys.forEach((key) => {
+    const nodeRef = ref(firebaseDb, `${FIREBASE_SHARED_NODE}/${key}`);
+    onChildAdded(nodeRef, async () => {
+      const snap = await get(nodeRef); state[key] = snap.val(); handleRemoteMutation();
+    });
+    onChildChanged(nodeRef, async () => {
+      const snap = await get(nodeRef); state[key] = snap.val(); handleRemoteMutation();
+    });
+    onChildRemoved(nodeRef, async () => { state[key] = Array.isArray(state[key]) ? [] : (typeof state[key] === 'object' ? {} : null); handleRemoteMutation(); });
+  });
+  normalizeCloudSettings();
+  normalizeWarehouseData();
+  normalizeDebtPaymentsData();
+  normalizePeopleData();
+  normalizeCashState();
+  syncAppConfig();
+  lastPersistedState = snapshotPayload();
+  firebaseReady = true;
+  handleRemoteMutation();
+}
+
+function handleRemoteMutation() {
+  ensureUsers();
+  normalizeCloudSettings();
+  normalizeWarehouseData();
+  normalizeDebtPaymentsData();
+  normalizePeopleData();
+  normalizeCashState();
+  syncAppConfig();
+  renderPeopleSelectors();
+  renderOrdersVisibility();
+  renderProducts();
+  renderOrders(false);
+  renderSalesHistory();
+  renderDeletedSales();
+  renderDebtors();
+  renderDebtPayments();
+  renderWarehouse();
+  renderSummary();
+  renderCashStatus();
+  renderCashClosings();
+  renderOutflows();
+  renderHomeActions();
+  renderSettings();
+  renderUsers();
+  applyRoute();
 }
 
 function defaultPermissions() {
@@ -862,8 +855,7 @@ function markUserActivity(reason = 'actividad') {
   state.currentUser.lastActivityAt = now;
   const user = currentUserRecord();
   if (user) user.lastActivityAt = now;
-  saveLocalState();
-}
+  }
 
 function touchSessionActivity() {
   if (!state.currentUser) return;
@@ -890,16 +882,14 @@ function validateSessionPolicy({ silent = false } = {}) {
   }
   if (user.enabled === false) {
     user.lastLogoutAt = Date.now();
-    saveLocalState();
-    logout('Usuario inhabilitado por administrador.');
+        logout('Usuario inhabilitado por administrador.');
     return false;
   }
   const loginAt = Number(state.currentUser.loginAt || 0);
   const forcedAt = Number(state.forceLogoutAt || 0);
   if (forcedAt && loginAt && loginAt <= forcedAt) {
     user.lastLogoutAt = Date.now();
-    saveLocalState();
-    logout('La caja fue cerrada globalmente. Debes iniciar sesión nuevamente.');
+        logout('La caja fue cerrada globalmente. Debes iniciar sesión nuevamente.');
     return false;
   }
   const last = Math.max(
@@ -909,8 +899,7 @@ function validateSessionPolicy({ silent = false } = {}) {
   );
   if (last && (Date.now() - last) >= SESSION_INACTIVITY_LIMIT_MS) {
     user.lastLogoutAt = Date.now();
-    saveLocalState();
-    logout('Sesión expirada por inactividad (3 horas).');
+        logout('Sesión expirada por inactividad (3 horas).');
     return false;
   }
   if (!silent) markUserActivity('request');
@@ -979,8 +968,6 @@ function ensurePeopleData() {
     changed = true;
     return { id: uid(), ...person };
   });
-  if (changed) saveLocalState();
-}
 
 function currentSalesMode() {
   const username = state.currentUser?.username || '';
@@ -1263,58 +1250,10 @@ function syncSaleUiModeVisibility() {
   setSaleModeDomVisibility();
 }
 
-function openImageDb() {
-  if (imageDbPromise) return imageDbPromise;
-  imageDbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(IMAGE_DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IMAGE_DB_STORE)) db.createObjectStore(IMAGE_DB_STORE);
-    };
-    req.onsuccess = () => {
-      const db = req.result;
-      db.onclose = () => { imageDbPromise = null; };
-      resolve(db);
-    };
-    req.onerror = () => {
-      imageDbPromise = null;
-      reject(req.error || new Error('No se pudo abrir IndexedDB de imágenes.'));
-    };
-  });
-  return imageDbPromise;
-}
-
-async function imageDbPut(key, blob) {
-  const db = await openImageDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(IMAGE_DB_STORE, 'readwrite');
-    tx.objectStore(IMAGE_DB_STORE).put(blob, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error('Error guardando imagen en IndexedDB.'));
-  });
-}
-
-async function imageDbGet(key) {
-  const db = await openImageDb();
-  const out = await new Promise((resolve, reject) => {
-    const tx = db.transaction(IMAGE_DB_STORE, 'readonly');
-    const req = tx.objectStore(IMAGE_DB_STORE).get(key);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error || new Error('Error leyendo imagen de IndexedDB.'));
-  });
-  return out;
-}
-
-async function imageDbDelete(key) {
-  if (!key) return;
-  const db = await openImageDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(IMAGE_DB_STORE, 'readwrite');
-    tx.objectStore(IMAGE_DB_STORE).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error('Error eliminando imagen de IndexedDB.'));
-  });
-}
+function openImageDb() { return null; }
+async function imageDbPut() { return null; }
+async function imageDbGet() { return null; }
+async function imageDbDelete() { return null; }
 
 function scheduleImageUiRefresh({ products = false, touch = false } = {}) {
   if (scheduledImageUiRefresh) return;
@@ -1326,25 +1265,25 @@ function scheduleImageUiRefresh({ products = false, touch = false } = {}) {
 }
 
 function imageRefKey(value) {
-  return String(value || '').startsWith('idb:') ? String(value).slice(4) : '';
+  return '';
 }
 
 function clearImageMissingRef(value) {
   const raw = String(value || '');
-  if (!raw || !raw.startsWith('idb:')) return;
+  if (!raw) return;
   delete imageMissingRefs[raw];
 }
 
 function markImageMissingRef(value) {
   const raw = String(value || '');
-  if (!raw || !raw.startsWith('idb:')) return;
+  if (!raw) return;
   const prev = imageMissingRefs[raw] || { attempts: 0, lastAttemptAt: 0, missing: false };
   imageMissingRefs[raw] = { missing: true, attempts: Number(prev.attempts || 0) + 1, lastAttemptAt: Date.now() };
 }
 
 function forceRetryImageRef(value) {
   const raw = String(value || '');
-  if (!raw || !raw.startsWith('idb:')) return;
+  if (!raw) return;
   clearImageMissingRef(raw);
   delete imageLoadInFlight[raw];
   resolveImageSource(raw);
@@ -1417,8 +1356,7 @@ function persistImageChange(onRollback) {
   try {
     // Guardado local directo para evitar estados "subidos" que luego se pierden.
     state.lastSyncAt = Math.max(Number(state.lastSyncAt || 0), Date.now());
-    saveLocalState();
-    // Sincronización remota en segundo plano (no bloqueante).
+        // Sincronización remota en segundo plano (no bloqueante).
     scheduleCloudSync(document.hidden ? 3500 : 1200);
     return true;
   } catch (error) {
@@ -1662,6 +1600,12 @@ function applySettings() {
     posHeaderLogo.src = state.settings.logoDataUrl;
     posHeaderLogo.classList.remove('hidden');
   }
+}
+function renderSettings() {
+  applySettings();
+  if (firebaseDbUrlInput) { firebaseDbUrlInput.value = FIREBASE_DB_URL; firebaseDbUrlInput.readOnly = true; }
+  if (firebaseDbTokenInput) { firebaseDbTokenInput.value = FIREBASE_TOKEN; firebaseDbTokenInput.readOnly = true; }
+  if (firebaseDbPathInput) { firebaseDbPathInput.value = FIREBASE_SHARED_NODE; firebaseDbPathInput.readOnly = true; }
 }
 
 function renderCashStatus() {
@@ -2778,7 +2722,7 @@ function openProductListView() {
 
 function renderImageRetryHint(kind, key, value) {
   const raw = String(value || '');
-  if (!raw.startsWith('idb:')) return '';
+  return raw;
   const meta = imageMissingRefs[raw];
   if (!meta?.missing) return '';
   return `<div class="upload-error">Imagen no disponible en este navegador.</div><button class="secondary" data-img-retry-kind="${kind}" data-img-retry-key="${escapeHtml(String(key || ''))}" type="button">Reintentar</button>`;
@@ -3675,105 +3619,6 @@ function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
   return [...map.values()];
 }
 
-async function syncToCloud(options = {}) {
-  if (!state.settings.firebaseDbUrl) return;
-  try {
-    const token = state.settings.firebaseDbToken ? `?auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
-    const url = `${state.settings.firebaseDbUrl.replace(/\/$/, '')}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json${token}`;
-    const remoteResp = await fetch(url, { headers: { 'X-Firebase-ETag': 'true' } });
-    const remoteData = await remoteResp.json();
-    const remoteEtag = remoteResp.headers.get('ETag');
-    const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
-    const payload = snapshotPayload();
-    const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
-    payload.deletedRecordIds = mergedDeleted;
-    payload.sales = mergeByIdPreferRemote(remoteData?.sales, payload.sales, mergedDeleted.sales);
-    payload.cashClosings = mergeByIdPreferRemote(remoteData?.cashClosings, payload.cashClosings, mergedDeleted.cashClosings);
-    payload.deletedSales = mergeByIdPreferRemote(remoteData?.deletedSales, payload.deletedSales);
-    payload.outflows = mergeByIdPreferRemote(remoteData?.outflows, payload.outflows);
-    payload.debtPayments = mergeByIdPreferRemote(remoteData?.debtPayments, payload.debtPayments);
-    payload.cashBoxes = mergeCashBoxes(remoteData?.cashBoxes, payload.cashBoxes);
-    if (!payload.activeCashBoxId && remoteData?.activeCashBoxId) payload.activeCashBoxId = remoteData.activeCashBoxId;
-    if (payload.systemStatus === 'CAJA_CERRADA' && remoteData?.systemStatus === 'CAJA_ABIERTA' && payload.activeCashBoxId === remoteData.activeCashBoxId) {
-      payload.systemStatus = remoteData.systemStatus;
-      payload.cashSession = remoteData.cashSession || payload.cashSession;
-    }
-    if (remoteUpdatedAt && Number(payload.updatedAt || 0) <= remoteUpdatedAt) payload.updatedAt = remoteUpdatedAt + 1;
-    const putHeaders = { 'Content-Type': 'application/json' };
-    if (remoteEtag) putHeaders['if-match'] = remoteEtag;
-    const putResp = await fetch(url, { method: 'PUT', headers: putHeaders, body: JSON.stringify(payload) });
-    if (putResp.status === 412) {
-      if (Number(options.attempt || 0) < 2) return syncToCloud({ ...options, attempt: Number(options.attempt || 0) + 1 });
-      if (syncStatus) syncStatus.textContent = 'Conflicto detectado. Reintenta sincronizar.';
-      throw new Error('sync conflict');
-    }
-    if (!putResp.ok) throw new Error(`sync put failed: ${putResp.status}`);
-    state.lastSyncAt = Number(payload.updatedAt || Date.now());
-    saveLocalState();
-    if (syncStatus) syncStatus.textContent = 'Sincronización enviada.';
-  } catch (err) {
-    if (syncStatus) syncStatus.textContent = 'Error de sincronización.';
-    throw err;
-  }
-}
-
-async function pullFromCloud(options = {}) {
-  if (!state.settings.firebaseDbUrl) return;
-  const now = Date.now();
-  if (!options.force && (now - lastCloudPullAt) < CLOUD_PULL_MIN_INTERVAL_MS) return;
-  if (cloudPullInFlight) return cloudPullInFlight;
-  cloudPullInFlight = (async () => {
-  try {
-    lastCloudPullAt = Date.now();
-    const token = state.settings.firebaseDbToken ? `?auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
-    const rootUrl = `${state.settings.firebaseDbUrl.replace(/\/$/, '')}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json${token}`;
-    if (!options.force) {
-      const stampResp = await fetch(rootUrl.replace(/\.json(\?.*)?$/, '/updatedAt.json$1'));
-      const remoteStamp = Number(await stampResp.json() || 0);
-      if (!remoteStamp || remoteStamp <= Number(state.lastSyncAt || 0)) return;
-    }
-    const r = await fetch(rootUrl);
-    const data = await r.json();
-    if (!data || !data.updatedAt) return;
-    if (!options.force && data.updatedAt <= state.lastSyncAt) {
-      return;
-    }
-    state.lastSyncAt = Number(data.updatedAt || Date.now());
-    state.forceLogoutAt = Number(data.forceLogoutAt || 0);
-    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds'].forEach((k) => {
-      if (data[k] !== undefined) state[k] = data[k];
-    });
-    if (state.currentUser && !validateSessionPolicy({ silent: true })) return;
-    normalizeCloudSettings();
-    normalizeWarehouseData();
-    normalizeDebtPaymentsData();
-    normalizePeopleData();
-    normalizeCashState();
-    const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
-    const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
-    if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
-    if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
-  syncAppConfig();
-    console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus });
-    saveLocalState();
-    renderOrdersVisibility();
-    renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
-    cloudHydrated = true;
-    const currentRoute = normalizeRoute(window.location.hash || '#home');
-    const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
-    const inPosBranch = currentRoute.startsWith('pos/') || currentRoute === 'cash/closings';
-    if (state.currentUser && !getActiveCashBox() && !inSettingsBranch && !inPosBranch) {
-      maybeForceLogoutFromClosure();
-    }
-    applyRoute();
-  } catch {}
-  finally {
-    cloudPullInFlight = null;
-  }
-  })();
-  return cloudPullInFlight;
-}
-
 function renderHomeActions() {
   const active = isCashOpen();
   if (goSalesBtn) goSalesBtn.classList.toggle('hidden', !active || !hasPermission('viewSalesButton'));
@@ -3874,14 +3719,12 @@ async function handleLogin() {
   const now = Date.now();
   user.lastActivityAt = now;
   state.currentUser = { username: user.username, loginAt: now, lastActivityAt: now };
-  saveLocalState();
-  beginSessionWatcher();
+    beginSessionWatcher();
   if (loginUserInput) loginUserInput.value = '';
   if (loginPassInput) loginPassInput.value = '';
   setMsg(loginMessage, '');
   markUserActivity('login');
   persist();
-  cloudHydrated = true;
   maybeForceLogoutFromClosure();
   if (!state.currentUser) return;
   renderOrdersVisibility();
@@ -4066,6 +3909,44 @@ async function closeCashSession() {
   }
 }
 
+async function commitSaleAtomically({ sale, cartItems, activeCashBoxId, stockEnabled }) {
+  const rootSaleRef = ref(firebaseDb, FIREBASE_SHARED_NODE);
+  const result = await runTransaction(rootSaleRef, (root) => {
+    const data = root && typeof root === 'object' ? root : {};
+    data.products = data.products || {};
+    data.sales = data.sales || {};
+    data.orderCounters = data.orderCounters || {};
+    data.updatedAt = Date.now();
+    const nextOrder = Number(data.orderCounters[activeCashBoxId] || 0) + 1;
+    data.orderCounters[activeCashBoxId] = nextOrder;
+    const finalizedSale = { ...sale, orderNumber: nextOrder };
+    if (stockEnabled) {
+      for (const item of cartItems) {
+        const product = data.products?.[item.id];
+        if (!product) return;
+        if (Number(product.stockCurrent || 0) < Number(item.qty || 0)) return;
+        product.stockCurrent = Number(product.stockCurrent || 0) - Number(item.qty || 0);
+        if (Array.isArray(product.combo) && product.combo.length) {
+          const req = comboComponentRequirements(product, item.qty);
+          for (const [componentId, neededQty] of req.entries()) {
+            const component = data.products?.[componentId];
+            if (!component || Number(component.stockCurrent || 0) < Number(neededQty || 0)) return;
+            component.stockCurrent = Number(component.stockCurrent || 0) - Number(neededQty || 0);
+          }
+        }
+      }
+    }
+    data.sales[finalizedSale.id] = finalizedSale;
+    return data;
+  }, { applyLocally: false });
+  if (!result.committed) throw new Error('La transacción de venta no fue confirmada por Firebase.');
+  const committed = result.snapshot.val() || {};
+  const committedSale = committed.sales?.[sale.id];
+  if (!committedSale) throw new Error('Firebase confirmó la transacción pero no devolvió la venta.');
+  state.orderCounters = committed.orderCounters || state.orderCounters || {};
+  return committedSale;
+}
+
 async function registerSale() {
   if (isSubmittingSale) return;
   isSubmittingSale = true;
@@ -4126,45 +4007,13 @@ async function registerSale() {
   const deliveryItems = [];
   state.currentCart.forEach((item) => { for (let i = 0; i < item.qty; i += 1) deliveryItems.push({ name: formatProductWithComboText(item), delivered: false, deliveredBy: '' }); });
   const activeCashBoxId = state.activeCashBoxId;
-  const orderNumber = await reserveNextOrderNumber(activeCashBoxId);
-  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  const saleDraft = { id: uid(), cashBoxId: activeCashBoxId, orderNumber: null, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  const sale = await commitSaleAtomically({ sale: saleDraft, cartItems: state.currentCart.map((i) => ({ ...i })), activeCashBoxId, stockEnabled: isStockEnabled() });
   sale.invoiceSnapshot = buildInvoiceData(sale);
-  if (isStockEnabled()) {
-    for (const item of state.currentCart) {
-      const p = state.products.find((x) => x.id === item.id);
-      if (!p) continue;
-      const next = Number(p.stockCurrent || 0) - Number(item.qty || 0);
-      p.stockCurrent = next;
-      if (next <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', p.name, next);
-      if (Array.isArray(p.combo) && p.combo.length) {
-        const req = comboComponentRequirements(p, item.qty);
-        req.forEach((neededQty, componentId) => {
-          const component = state.products.find((x) => x.id === componentId);
-          if (!component) return;
-          const cNext = Number(component.stockCurrent || 0) - Number(neededQty || 0);
-          component.stockCurrent = cNext;
-          if (cNext <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', component.name, cNext);
-        });
-      }
-    }
-  }
+  await update(ref(firebaseDb, `${FIREBASE_SHARED_NODE}/sales/${sale.id}`), { invoiceSnapshot: sale.invoiceSnapshot, updatedAt: Date.now() });
   applyWarehouseImpactFromSaleItems(sale.items, { reverse: false, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
-  state.sales.unshift(sale);
   state.currentCart = [];
-  persist({ sync: false });
-  let confirmed = false;
-  try {
-    await syncToCloud({ attempt: 0 });
-    confirmed = true;
-    Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
-  } catch (err) {
-    console.error('[sale] confirm sync failed', err);
-  }
-  if (!confirmed) {
-    state.sales = state.sales.filter((x) => x.id !== sale.id);
-    persist({ sync: false });
-    return setMsg(saleMessage, 'No se pudo confirmar la venta en la nube. Intenta nuevamente.', false);
-  }
+  await syncToCloud();
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -5433,6 +5282,8 @@ function wireEvents() {
   });
 }
 
+}
+
 async function bootstrap() {
   normalizeCloudSettings();
   ensureUsers();
@@ -5443,17 +5294,6 @@ async function bootstrap() {
   if (!state.userSalesModes || typeof state.userSalesModes !== 'object') state.userSalesModes = {};
   if (!state.touchUiConfigByUser || typeof state.touchUiConfigByUser !== 'object') state.touchUiConfigByUser = {};
   if (!state.categoryImages || typeof state.categoryImages !== 'object') state.categoryImages = {};
-
-  (state.products || []).forEach((p) => {
-    if (p?.imageUrl && String(p.imageUrl).startsWith('idb:')) delete p.imageUrl;
-    if (!p?.imageUrl && p?.imageDataUrl && !String(p.imageDataUrl).startsWith('data:')) p.imageUrl = p.imageDataUrl;
-    if (p?.imageDataUrl && String(p.imageDataUrl).startsWith('idb:')) delete p.imageDataUrl;
-  });
-  Object.keys(state.categoryImages || {}).forEach((key) => {
-    const raw = String(state.categoryImages[key] || '');
-    if (raw.startsWith('idb:')) delete state.categoryImages[key];
-  });
-
   if (!state.orderCounters || typeof state.orderCounters !== 'object') state.orderCounters = {};
   if (!state.deletedRecordIds || typeof state.deletedRecordIds !== 'object') state.deletedRecordIds = { cashClosings: [], sales: [] };
   if (!Array.isArray(state.deletedRecordIds.cashClosings)) state.deletedRecordIds.cashClosings = [];
@@ -5462,49 +5302,20 @@ async function bootstrap() {
   normalizeDebtPaymentsData();
   normalizeCashState();
   syncAppConfig();
-  saveLocalState();
   applySettings();
   ensureSalesModeButton();
   wireEvents();
   Promise.resolve().then(() => ensureJsPdfLibs()).catch(() => {});
-  renderOrdersVisibility();
-  beginSessionWatcher();
-  renderSaleSelectors();
-  renderCart();
-  renderPeopleSelectors();
-  renderDebtors();
-  renderOrders(false);
-  renderSalesHistory();
-  renderDeletedSales();
-  renderDebtPayments();
-  renderProducts();
-  renderOutflows();
-  renderWarehouse();
-  renderSummary();
-  renderSoldProductsList();
-  const validSession = Boolean(state.currentUser && currentUserRecord());
-  window.addEventListener('storage', (e) => { if (!e.key || !e.key.startsWith('cafeteria_')) return; pullFromCloud({ force: true }); });
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
-  setInterval(() => { if (document.hidden) return; pullFromCloud(); }, CLOUD_POLL_INTERVAL_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
-  window.addEventListener('online', () => { pullFromCloud({ force: true }); });
-  Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
-  if (state.currentUser && validSession) {
-    try { await pullFromCloud({ force: true }); } catch {}
-  } else {
-    Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+  try {
+    await initializeRealtimeState();
+    console.info('[firebase] conexión validada', { url: FIREBASE_DB_URL, node: FIREBASE_SHARED_NODE });
+  } catch (error) {
+    console.error('[firebase] inicialización falló', error);
+    setMsg(loginMessage, `Firebase no respondió correctamente: ${error.message || error}`, false);
   }
-  cloudHydrated = true;
-  maybeForceLogoutFromClosure();
-  if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
-    navStack = ['home'];
-    navigateTo(normalizeRoute(window.location.hash || '#home'), { replace: true });
-    if (!getActiveCashBox()) setMsg(homeMessage, 'La caja está cerrada. Espera a que un usuario autorizado la abra.', false);
-  } else {
-    state.currentUser = null;
-    persist({ sync: false });
-    showLogin();
-  }
+  beginSessionWatcher();
+  showLogin();
 }
 
 bootstrap();
