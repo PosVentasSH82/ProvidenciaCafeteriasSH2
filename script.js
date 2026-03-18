@@ -1,22 +1,3 @@
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js';
-import {
-  getDatabase,
-  ref,
-  get,
-  set,
-  update,
-  push,
-  remove,
-  runTransaction,
-  onChildAdded,
-  onChildChanged,
-  onChildRemoved,
-  connectDatabaseEmulator,
-  goOffline,
-  goOnline
-} from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js';
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js';
-
 const firebaseConfig = {
   apiKey: 'AIzaSyDj7CUA6ZojlG0lFRL3MpLt1YK3rHYIeLo',
   authDomain: 'cafeteria-sh82-3dea3.firebaseapp.com',
@@ -29,11 +10,27 @@ const firebaseConfig = {
 const FIREBASE_DB_URL = 'https://cafeteria-sh82-3dea3-default-rtdb.firebaseio.com';
 const FIREBASE_SHARED_NODE = 'cafeteria_shared';
 const FIREBASE_TOKEN = 'lnOKi5riEL7Rd6O6XQbqDFkiPzvmmaa7X7L08Zpc';
-const firebaseApp = initializeApp(firebaseConfig);
-const firebaseDb = getDatabase(firebaseApp);
-const firebaseStorage = getStorage(firebaseApp);
-const realtimeRootRef = ref(firebaseDb, FIREBASE_SHARED_NODE);
+if (!window.firebase) throw new Error('Firebase SDK no cargó. Revisa los scripts compat en index.html.');
+const firebaseApp = window.firebase.apps.length ? window.firebase.apps[0] : window.firebase.initializeApp(firebaseConfig);
+const firebaseDb = firebaseApp.database();
+const firebaseStorage = firebaseApp.storage();
+const realtimeRootRef = firebaseDb.ref(FIREBASE_SHARED_NODE);
 const SESSION_STORAGE_KEY = 'cafeteria_current_session';
+
+function ref(target, path = '') { return path ? target.ref(path) : target; }
+function get(reference) { return reference.once('value'); }
+function set(reference, value) { return reference.set(value); }
+function update(reference, value) { return reference.update(value); }
+function push(reference, value) { const child = reference.push(); return value === undefined ? child : child.set(value).then(() => child); }
+function remove(reference) { return reference.remove(); }
+function runTransaction(reference, updater) { return new Promise((resolve, reject) => { reference.transaction((current) => updater(current), (error, committed, snapshot) => error ? reject(error) : resolve({ committed, snapshot }), false); }); }
+function onChildAdded(reference, cb) { return reference.on('child_added', cb); }
+function onChildChanged(reference, cb) { return reference.on('child_changed', cb); }
+function onChildRemoved(reference, cb) { return reference.on('child_removed', cb); }
+function storageRef(storage, path = '') { return storage.ref(path); }
+function uploadBytesResumable(reference, blob, metadata) { return reference.put(blob, metadata); }
+function getDownloadURL(reference) { return reference.getDownloadURL(); }
+function deleteObject(reference) { return reference.delete(); }
 
 const defaultUiSettings = { title1:'Mi Cafetería', title2:'Pantalla principal', posTitle:'POS Cafetería', posSubtitle:'Ventas, productos, deudas, cierres y resumen diario.', logoDataUrl:'', accentColor:'#1f7a5c', bgColor:'#f7f7fb', cardColor:'#ffffff', logoSize:120, title1Size:32, title2Size:16, title1Font:'Inter, system-ui, sans-serif', title2Font:'Inter, system-ui, sans-serif', title1Color:'#1d2530', title2Color:'#6f7a86', posLogoSize:56, ordersEnabled:true };
 const state = {
@@ -3726,7 +3723,7 @@ function switchToPos(tabId = 'ventas') {
 async function handleLogin() {
   const username = loginUserInput?.value?.trim() || '';
   const password = loginPassInput?.value?.trim() || '';
-  console.info('[auth] intento de login', { username, firebaseReady, usersLoaded: Array.isArray(state.users) ? state.users.length : 0 });
+  console.info('LOGIN INICIADO', { username, firebaseReady, usersLoaded: Array.isArray(state.users) ? state.users.length : 0 });
   if (!username || !password) return setMsg(loginMessage, 'Ingresa usuario y contraseña para continuar.', false);
   try {
     setMsg(loginMessage, 'Validando acceso...');
@@ -4678,9 +4675,9 @@ function wireEvents() {
   document.addEventListener('keydown', touchSessionActivity);
   document.addEventListener('pointerdown', touchSessionActivity);
 
-  loginBtn?.addEventListener('click', handleLogin);
-  loginUserInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
-  loginPassInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
+  loginBtn?.addEventListener('click', () => { console.info('CLICK DETECTADO'); handleLogin(); });
+  loginUserInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { console.info('CLICK DETECTADO'); handleLogin(); } });
+  loginPassInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { console.info('CLICK DETECTADO'); handleLogin(); } });
   logoutBtn?.addEventListener('click', logout);
   posLogoutBtn?.addEventListener('click', logout);
   startCashBtn?.addEventListener('click', () => { settingsCard?.classList.add('hidden'); openStartCashModal(); });
